@@ -11,6 +11,10 @@
 !> \date 07.2023
 ! **************************************************************************************************
 MODULE post_scf_bandstructure_utils
+   USE atomic_kind_types,               ONLY: atomic_kind_type,&
+                                              get_atomic_kind_set
+   USE basis_set_types,                 ONLY: get_gto_basis_set,&
+                                              gto_basis_set_type
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
                                               cp_cfm_release,&
                                               cp_cfm_to_fm,&
@@ -147,7 +151,19 @@ CONTAINS
 
       CALL set_heuristic_parameters(bs_env)
 
-      CALL setup_kpoints_DOS(qs_env, bs_env, bs_env%kpoints_DOS)
+      SELECT CASE (bs_env%small_cell_full_kp_or_large_cell_Gamma)
+      CASE (large_cell_Gamma)
+
+         CALL setup_kpoints_DOS_large_cell_Gamma(qs_env, bs_env, bs_env%kpoints_DOS)
+
+      CASE (small_cell_full_kp)
+
+         CALL setup_kpoints_scf_desymm(qs_env, bs_env, bs_env%kpoints_scf_desymm, .TRUE.)
+         CALL setup_kpoints_scf_desymm(qs_env, bs_env, bs_env%kpoints_scf_desymm_2, .FALSE.)
+
+         CALL setup_kpoints_DOS_small_cell_full_kp(bs_env, bs_env%kpoints_DOS)
+
+      END SELECT
 
       CALL allocate_and_fill_fm_ks_fm_s(qs_env, bs_env)
 
@@ -155,6 +171,7 @@ CONTAINS
 
       CALL check_positive_definite_overlap_mat(bs_env, qs_env)
 
+! JW 2del
       IF (bs_env%do_bs) THEN
          CALL setup_kpoints_bandstructure(bs_env, bs_env%kpoints_bandstructure)
          CALL setup_primitive_cell_for_bandstructure(qs_env, bs_env)
@@ -271,13 +288,13 @@ CONTAINS
 !> \param bs_env ...
 !> \param kpoints ...
 ! **************************************************************************************************
-   SUBROUTINE setup_kpoints_DOS(qs_env, bs_env, kpoints)
+   SUBROUTINE setup_kpoints_DOS_large_cell_Gamma(qs_env, bs_env, kpoints)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
       TYPE(kpoint_type), POINTER                         :: kpoints
 
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'setup_kpoints_DOS'
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'setup_kpoints_DOS_large_cell_Gamma'
 
       INTEGER                                            :: handle, i_dim, nkp, u
       INTEGER, DIMENSION(3)                              :: nkp_grid, periodic
@@ -338,7 +355,168 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE setup_kpoints_DOS
+   END SUBROUTINE setup_kpoints_DOS_large_cell_Gamma
+
+   SUBROUTINE setup_kpoints_scf_desymm(qs_env, bs_env, kpoints, do_print)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
+      TYPE(kpoint_type), POINTER                         :: kpoints
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'setup_kpoints_scf_desymm'
+
+      INTEGER                                            :: handle, i_cell_x, i_dim, img, j_cell_y, &
+                                                            k_cell_z, nimages, nkp, u
+      INTEGER, DIMENSION(3)                              :: cell_grid, cixd, nkp_grid
+      TYPE(kpoint_type), POINTER                         :: kpoints_scf
+
+      LOGICAL:: do_print
+
+      CALL timeset(routineN, handle)
+
+      NULLIFY (kpoints)
+      CALL kpoint_create(kpoints)
+
+      CALL get_qs_env(qs_env=qs_env, kpoints=kpoints_scf)
+
+      nkp_grid(1:3) = kpoints_scf%nkp_grid(1:3)
+      nkp = nkp_grid(1)*nkp_grid(2)*nkp_grid(3)
+
+      ! we need in periodic directions at least 2 k-points in the SCF
+      DO i_dim = 1, 3
+         IF (bs_env%periodic(i_dim) == 1) THEN
+            CPASSERT(nkp_grid(i_dim) > 1)
+         END IF
+      END DO
+
+      kpoints%kp_scheme = "GENERAL"
+      kpoints%nkp_grid(1:3) = nkp_grid(1:3)
+      kpoints%nkp = nkp
+      bs_env%nkp_scf_desymm = nkp
+
+      ALLOCATE (kpoints%xkp(1:3, nkp))
+      CALL compute_xkp(kpoints%xkp, 1, nkp, nkp_grid)
+
+      ALLOCATE (kpoints%wkp(nkp))
+      kpoints%wkp(:) = 1.0_dp/REAL(nkp, KIND=dp)
+
+      ! for example 4x3x6 kpoint grid -> 3x3x5 cell grid because we need the same number of
+      ! neighbor cells on both sides of the unit cell
+      cell_grid(1:3) = nkp_grid(1:3) - MODULO(nkp_grid(1:3) + 1, 2)
+      ! cell index: for example for x: from -n_x/2 to +n_x/2, n_x: number of cells in x direction
+      cixd(1:3) = cell_grid(1:3)/2
+
+      nimages = cell_grid(1)*cell_grid(2)*cell_grid(3)
+
+      bs_env%nimages_scf_desymm = nimages
+
+      ALLOCATE (kpoints%cell_to_index(-cixd(1):cixd(1), -cixd(2):cixd(2), -cixd(3):cixd(3)))
+      ALLOCATE (kpoints%index_to_cell(nimages, 3))
+
+      img = 0
+      DO i_cell_x = -cixd(1), cixd(1)
+         DO j_cell_y = -cixd(2), cixd(2)
+            DO k_cell_z = -cixd(3), cixd(3)
+               img = img + 1
+               kpoints%cell_to_index(i_cell_x, j_cell_y, k_cell_z) = img
+               kpoints%index_to_cell(img, 1:3) = (/i_cell_x, j_cell_y, k_cell_z/)
+            END DO
+         END DO
+      END DO
+
+      u = bs_env%unit_nr
+      IF (u > 0 .AND. do_print) THEN
+         WRITE (UNIT=u, FMT="(T2,A,I49)") "Number of cells for G, χ, W, Σ", nimages
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE setup_kpoints_scf_desymm
+
+
+   SUBROUTINE setup_kpoints_DOS_small_cell_full_kp(bs_env, kpoints)
+
+      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
+      TYPE(kpoint_type), POINTER                         :: kpoints
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'setup_kpoints_DOS_small_cell_full_kp'
+
+      INTEGER                                            :: handle, i_kp_in_line, i_special_kp, ikk, &
+                                                            n_kp_in_line, n_special_kp, nkp, u, &
+                  nkp_only_bs, nkp_scf_desymm
+
+      CALL timeset(routineN, handle)
+
+      ! routine adapted from mp2_integrals.F
+      NULLIFY (kpoints)
+      CALL kpoint_create(kpoints)
+
+      n_special_kp = bs_env%input_kp_bs_n_sp_pts
+      n_kp_in_line = bs_env%input_kp_bs_npoints
+      nkp_scf_desymm = bs_env%nkp_scf_desymm
+
+      ! we will compute the GW QP levels for all k's in the bandstructure path but also
+      ! for all k-points from the SCF (e.g. for DOS or for self-consistent GW)
+      IF(n_special_kp > 0) THEN
+         nkp_only_bs = n_kp_in_line*(n_special_kp - 1) + 1
+      ELSE
+         nkp_only_bs = 0
+      END IF
+      nkp = nkp_only_bs + nkp_scf_desymm
+
+      ALLOCATE (kpoints%xkp(3, nkp))
+      ALLOCATE (kpoints%wkp(nkp))
+
+      kpoints%nkp = nkp
+
+      bs_env%nkp_bs = nkp
+      bs_env%nkp_only_bs = nkp_only_bs
+
+      kpoints%xkp(1:3, 1:nkp_scf_desymm) = bs_env%kpoints_scf_desymm%xkp(1:3, 1:nkp_scf_desymm)
+      kpoints%wkp(1:nkp_scf_desymm) = 1.0_dp/REAL(nkp_scf_desymm, KIND=dp)
+
+      IF(n_special_kp > 0) THEN
+         kpoints%xkp(1:3, nkp_scf_desymm + 1) = bs_env%xkp_special(1:3, 1)
+         ikk = nkp_scf_desymm + 1
+         DO i_special_kp = 2, n_special_kp
+            DO i_kp_in_line = 1, n_kp_in_line
+               ikk = ikk + 1
+               kpoints%xkp(1:3, ikk) = bs_env%xkp_special(1:3, i_special_kp - 1) + &
+                                       REAL(i_kp_in_line, KIND=dp)/REAL(n_kp_in_line, KIND=dp)* &
+                                       (bs_env%xkp_special(1:3, i_special_kp) - &
+                                        bs_env%xkp_special(1:3, i_special_kp - 1))
+               kpoints%wkp(ikk) = 0.0_dp
+            END DO
+         END DO
+      END IF
+
+      ALLOCATE (kpoints%index_to_cell(bs_env%nimages_scf_desymm, 3))
+      kpoints%index_to_cell(:,:) = bs_env%kpoints_scf_desymm%index_to_cell(:,:)
+
+      u = bs_env%unit_nr
+
+      IF (u > 0) THEN
+         WRITE (UNIT=u, FMT="(T2,1A,T77,I4)") "Number of special k-points for the bandstructure", &
+            n_special_kp
+         WRITE (UNIT=u, FMT="(T2,1A,T77,I4)") "Number of k-points for the bandstructure", nkp
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE setup_kpoints_DOS_small_cell_full_kp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ! **************************************************************************************************
 !> \brief ...
@@ -1547,7 +1725,7 @@ CONTAINS
                ! 3. get C_µn(k_i) and ϵ_n(k_i)
                CALL cp_fm_to_cfm(bs_env%fm_mo_coeff_kp(ikp, ispin, 1), &
                                  bs_env%fm_mo_coeff_kp(ikp, ispin, 2), cfm_mos_ikp(ispin))
-               eigenval(:) = bs_env%eigenval_kp_scf(:, ikp, ispin)
+               eigenval(:) = bs_env%eigenval_scf(:, ikp, ispin)
 
             END SELECT
 

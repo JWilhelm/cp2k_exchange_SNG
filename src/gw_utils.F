@@ -193,11 +193,6 @@ CONTAINS
 
          CALL setup_cells_3c(qs_env, bs_env)
 
-         CALL setup_kpoints_scf_desymm(qs_env, bs_env, bs_env%kpoints_scf_desymm, .TRUE.)
-         CALL setup_kpoints_scf_desymm(qs_env, bs_env, bs_env%kpoints_scf_desymm_2, .FALSE.)
-
-         CALL setup_kpoints_bandstructure(bs_env, bs_env%kpoints_bandstructure)
-
          CALL setup_cells_Delta_R(bs_env)
 
          CALL setup_parallelization_Delta_R_and_atom_pairs(bs_env)
@@ -1703,10 +1698,10 @@ CONTAINS
             E_max_ispin = bs_env%eigenval_scf_Gamma(n_mo, ispin) - &
                           bs_env%eigenval_scf_Gamma(1, ispin)
          CASE (small_cell_full_kp)
-            E_min_ispin = MINVAL(bs_env%eigenval_kp_scf(homo + 1, :, ispin)) - &
-                          MAXVAL(bs_env%eigenval_kp_scf(homo, :, ispin))
-            E_max_ispin = MAXVAL(bs_env%eigenval_kp_scf(n_mo, :, ispin)) - &
-                          MINVAL(bs_env%eigenval_kp_scf(1, :, ispin))
+            E_min_ispin = MINVAL(bs_env%eigenval_scf(homo + 1, :, ispin)) - &
+                          MAXVAL(bs_env%eigenval_scf(homo, :, ispin))
+            E_max_ispin = MAXVAL(bs_env%eigenval_scf(n_mo, :, ispin)) - &
+                          MINVAL(bs_env%eigenval_scf(1, :, ispin))
          END SELECT
          E_min = MIN(E_min, E_min_ispin)
          E_max = MAX(E_max, E_max_ispin)
@@ -2056,77 +2051,6 @@ CONTAINS
 
    END SUBROUTINE setup_kpoints_scf_desymm
 
-   SUBROUTINE setup_kpoints_bandstructure(bs_env, kpoints)
-
-      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
-      TYPE(kpoint_type), POINTER                         :: kpoints
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'setup_kpoints_bandstructure'
-
-      INTEGER                                            :: handle, i_kp_in_line, i_special_kp, ikk, &
-                                                            n_kp_in_line, n_special_kp, nkp, u, &
-                  nkp_only_bs, nkp_scf_desymm
-
-      CALL timeset(routineN, handle)
-
-      ! routine adapted from mp2_integrals.F
-      NULLIFY (kpoints)
-      CALL kpoint_create(kpoints)
-
-      n_special_kp = bs_env%input_kp_bs_n_sp_pts
-      n_kp_in_line = bs_env%input_kp_bs_npoints
-      nkp_scf_desymm = bs_env%nkp_scf_desymm
-
-      ! we will compute the GW QP levels for all k's in the bandstructure path but also
-      ! for all k-points from the SCF (e.g. for DOS or for self-consistent GW)
-      IF(n_special_kp > 0) THEN
-         nkp_only_bs = n_kp_in_line*(n_special_kp - 1) + 1
-      ELSE
-         nkp_only_bs = 0 
-      END IF
-      nkp = nkp_only_bs + nkp_scf_desymm
-
-      ALLOCATE (kpoints%xkp(3, nkp))
-      ALLOCATE (kpoints%wkp(nkp))
-
-      kpoints%nkp = nkp
-
-      bs_env%nkp_bs = nkp
-      bs_env%nkp_only_bs = nkp_only_bs
-
-      kpoints%xkp(1:3, 1:nkp_scf_desymm) = bs_env%kpoints_scf_desymm%xkp(1:3, 1:nkp_scf_desymm)
-      kpoints%wkp(1:nkp_scf_desymm) = 1.0_dp/REAL(nkp_scf_desymm, KIND=dp)
-
-      IF(n_special_kp > 0) THEN
-         kpoints%xkp(1:3, nkp_scf_desymm + 1) = bs_env%xkp_special(1:3, 1)
-         ikk = nkp_scf_desymm + 1
-         DO i_special_kp = 2, n_special_kp
-            DO i_kp_in_line = 1, n_kp_in_line
-               ikk = ikk + 1
-               kpoints%xkp(1:3, ikk) = bs_env%xkp_special(1:3, i_special_kp - 1) + &
-                                       REAL(i_kp_in_line, KIND=dp)/REAL(n_kp_in_line, KIND=dp)* &
-                                       (bs_env%xkp_special(1:3, i_special_kp) - &
-                                        bs_env%xkp_special(1:3, i_special_kp - 1))
-               kpoints%wkp(ikk) = 0.0_dp
-            END DO
-         END DO
-      END IF
-
-      ALLOCATE (kpoints%index_to_cell(bs_env%nimages_scf_desymm, 3))
-      kpoints%index_to_cell(:,:) = bs_env%kpoints_scf_desymm%index_to_cell(:,:)
- 
-      u = bs_env%unit_nr
-
-      IF (u > 0) THEN
-         WRITE (UNIT=u, FMT="(T2,1A,T77,I4)") "Number of special k-points for the bandstructure", &
-            n_special_kp
-         WRITE (UNIT=u, FMT="(T2,1A,T77,I4)") "Number of k-points for the bandstructure", nkp
-      END IF
-
-      CALL timestop(handle)
-
-   END SUBROUTINE setup_kpoints_bandstructure
-
 ! **************************************************************************************************
 !> \brief ...
 !> \param bs_env ...
@@ -2347,7 +2271,6 @@ CONTAINS
       ! nkp_bs contains desymmetrized k-point mesh from SCF and k-points from GW bandstructure
       nkp_bs = bs_env%nkp_bs
 
-      ALLOCATE (bs_env%eigenval_kp_scf(bs_env%n_ao, nkp_bs, bs_env%n_spin))
       ALLOCATE (bs_env%eigenval_G0W0(bs_env%n_ao, nkp_bs, bs_env%n_spin))
       ALLOCATE (bs_env%fm_mo_coeff_kp(nkp_bs, bs_env%n_spin, 2))
       ALLOCATE (bs_env%fm_ks_kp(nkp_bs, bs_env%n_spin, 2))
@@ -2368,7 +2291,7 @@ CONTAINS
       DO ispin = 1, bs_env%n_spin
          DO ikp = 1, nkp_bs
 
-            xkp(1:3) = bs_env%kpoints_bandstructure%xkp(1:3,ikp)
+            xkp(1:3) = bs_env%kpoints_DOS%xkp(1:3,ikp)
 
             ! h^KS^R -> h^KS(k)
             CALL rsmat_to_kp(matrix_ks, ispin, xkp, cell_to_index_scf, sab_nl, bs_env, cfm_ks)
@@ -2389,7 +2312,7 @@ CONTAINS
             ! Diagonalize KS-matrix via Rothaan-Hall equation:
             ! H^KS(k) C(k) = S(k) C(k) ε(k)
             CALL cp_cfm_geeig_canon(cfm_ks, cfm_s, cfm_mos, &
-                                    bs_env%eigenval_kp_scf(:, ikp, ispin), &
+                                    bs_env%eigenval_scf(:, ikp, ispin), &
                                     bs_env%cfm_work_mo, bs_env%eps_eigval_mat_s)
 
             ! we store the complex MO coeff as fm matrix because the infrastructure for fm is
@@ -2400,8 +2323,8 @@ CONTAINS
 
          END DO
 
-         VBM = MAXVAL(bs_env%eigenval_kp_scf(bs_env%n_occ(ispin), :, ispin))
-         CBM = MINVAL(bs_env%eigenval_kp_scf(bs_env%n_occ(ispin) + 1, :, ispin))
+         VBM = MAXVAL(bs_env%eigenval_scf(bs_env%n_occ(ispin), :, ispin))
+         CBM = MINVAL(bs_env%eigenval_scf(bs_env%n_occ(ispin) + 1, :, ispin))
 
          bs_env%e_fermi(ispin) = 0.5_dp*(VBM + CBM)
 
@@ -2564,7 +2487,7 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
          DO ikp = 1, bs_env%nkp_bs
 
             ! v^xc^R -> v^xc(k)  (matrix_ks stores v^xc^R, see SUBROUTINE compute_V_xc)
-            CALL rsmat_to_kp(matrix_ks, ispin, bs_env%kpoints_bandstructure%xkp(1:3, ikp), &
+            CALL rsmat_to_kp(matrix_ks, ispin, bs_env%kpoints_DOS%xkp(1:3, ikp), &
                              cell_to_index_scf, sab_nl, bs_env, cfm_V_xc)
 
             ! get C_µn(k)
@@ -2758,6 +2681,7 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
          CALL open_file(TRIM(fname), unit_number=iunit, file_status="REPLACE", file_action="WRITE")
 
          WRITE (iunit, "(A)") " "
+
          WRITE (iunit, "(A10,3F10.4)") "kpoint: ", bs_env%kpoints_DOS%xkp(:, ikp)
          WRITE (iunit, "(A)") " "
          WRITE (iunit, "(A5,A24,2A17,A16,A18)") "n", "ϵ_nk^DFT (eV)", "Σ^c_nk (eV)", &
@@ -2796,7 +2720,6 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
       INTEGER                                            :: handle, homo, homo_1, homo_2, ikp, &
                                                             ispin, lumo, lumo_1, lumo_2, n_mo
       REAL(KIND=dp)                                      :: E_DBG_G0W0_at_ikp, E_DBG_scf_at_ikp
-      REAL(KIND=dp), DIMENSION(:,:,:), POINTER :: eigenval_scf
 
       CALL timeset(routineN, handle)
 
@@ -2805,19 +2728,12 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
       bs_env%band_edges_scf%DBG = 1000.0_dp
       bs_env%band_edges_G0W0%DBG = 1000.0_dp
 
-      SELECT CASE (bs_env%small_cell_full_kp_or_large_cell_Gamma)
-      CASE (large_cell_Gamma)
-         eigenval_scf => bs_env%eigenval_scf
-      CASE (small_cell_full_kp)
-         eigenval_scf => bs_env%eigenval_kp_scf
-      END SELECT
-
       SELECT CASE (bs_env%n_spin)
       CASE (1)
          homo = bs_env%n_occ(1)
          lumo = homo + 1
-         bs_env%band_edges_scf%VBM = MAXVAL(eigenval_scf(1:homo, :, 1))
-         bs_env%band_edges_scf%CBM = MINVAL(eigenval_scf(homo + 1:n_mo, :, 1))
+         bs_env%band_edges_scf%VBM = MAXVAL(bs_env%eigenval_scf(1:homo, :, 1))
+         bs_env%band_edges_scf%CBM = MINVAL(bs_env%eigenval_scf(homo + 1:n_mo, :, 1))
          bs_env%band_edges_G0W0%VBM = MAXVAL(bs_env%eigenval_G0W0(1:homo, :, 1))
          bs_env%band_edges_G0W0%CBM = MINVAL(bs_env%eigenval_G0W0(homo + 1:n_mo, :, 1))
       CASE (2)
@@ -2825,10 +2741,10 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
          lumo_1 = homo_1 + 1
          homo_2 = bs_env%n_occ(2)
          lumo_2 = homo_2 + 1
-         bs_env%band_edges_scf%VBM = MAX(MAXVAL(eigenval_scf(1:homo_1, :, 1)), &
-                                         MAXVAL(eigenval_scf(1:homo_2, :, 2)))
-         bs_env%band_edges_scf%CBM = MIN(MINVAL(eigenval_scf(homo_1 + 1:n_mo, :, 1)), &
-                                         MINVAL(eigenval_scf(homo_2 + 1:n_mo, :, 2)))
+         bs_env%band_edges_scf%VBM = MAX(MAXVAL(bs_env%eigenval_scf(1:homo_1, :, 1)), &
+                                         MAXVAL(bs_env%eigenval_scf(1:homo_2, :, 2)))
+         bs_env%band_edges_scf%CBM = MIN(MINVAL(bs_env%eigenval_scf(homo_1 + 1:n_mo, :, 1)), &
+                                         MINVAL(bs_env%eigenval_scf(homo_2 + 1:n_mo, :, 2)))
          bs_env%band_edges_G0W0%VBM = MAX(MAXVAL(bs_env%eigenval_G0W0(1:homo_1, :, 1)), &
                                           MAXVAL(bs_env%eigenval_G0W0(1:homo_2, :, 2)))
          bs_env%band_edges_G0W0%CBM = MIN(MINVAL(bs_env%eigenval_G0W0(homo_1 + 1:n_mo, :, 1)), &
@@ -2845,8 +2761,8 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
          homo = bs_env%n_occ(ispin)
 
          DO ikp = 1, bs_env%kpoints_DOS%nkp
-            E_DBG_scf_at_ikp = -MAXVAL(eigenval_scf(1:homo, ikp, ispin)) + &
-                               MINVAL(eigenval_scf(homo + 1:n_mo, ikp, ispin))
+            E_DBG_scf_at_ikp = -MAXVAL(bs_env%eigenval_scf(1:homo, ikp, ispin)) + &
+                               MINVAL(bs_env%eigenval_scf(homo + 1:n_mo, ikp, ispin))
             IF (E_DBG_scf_at_ikp < bs_env%band_edges_scf%DBG) THEN
                bs_env%band_edges_scf%DBG = E_DBG_scf_at_ikp
             END IF

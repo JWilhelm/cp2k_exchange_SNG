@@ -313,8 +313,7 @@ MODULE post_scf_bandstructure_types
                                                            fm_MWM_R_t, &
                                                            fm_Sigma_c_R_neg_tau, &
                                                            fm_Sigma_c_R_pos_tau
-      REAL(KIND=dp), DIMENSION(:, :, :), ALLOCATABLE    :: eigenval_kp_scf, &
-                                                           v_xc_n
+      REAL(KIND=dp), DIMENSION(:, :, :), ALLOCATABLE    :: v_xc_n
 
    END TYPE post_scf_bandstructure_type
 
@@ -352,7 +351,6 @@ CONTAINS
       IF (ALLOCATED(bs_env%imag_time_points)) DEALLOCATE (bs_env%imag_time_points)
       IF (ALLOCATED(bs_env%imag_freq_points)) DEALLOCATE (bs_env%imag_freq_points)
       IF (ALLOCATED(bs_env%eigenval_scf_Gamma)) DEALLOCATE (bs_env%eigenval_scf_Gamma)
-      IF (ALLOCATED(bs_env%eigenval_kp_scf)) DEALLOCATE (bs_env%eigenval_kp_scf)
       IF (ALLOCATED(bs_env%eigenval_scf)) DEALLOCATE (bs_env%eigenval_scf)
       IF (ALLOCATED(bs_env%eigenval_G0W0)) DEALLOCATE (bs_env%eigenval_G0W0)
       IF (ALLOCATED(bs_env%eigenval_scGW0)) DEALLOCATE (bs_env%eigenval_scGW0)

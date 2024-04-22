@@ -359,7 +359,7 @@ CONTAINS
             j = col_indices(j_col_local)
 
             ! 0.5 * |(ϵ_nk-ϵ_F)τ|
-            tau_E = ABS(tau*0.5_dp*(bs_env%eigenval_kp_scf(j, ikp, ispin) - bs_env%e_fermi(ispin)))
+            tau_E = ABS(tau*0.5_dp*(bs_env%eigenval_scf(j, ikp, ispin) - bs_env%e_fermi(ispin)))
 
             IF (tau_E < bs_env%stabilize_exp) THEN
                bs_env%cfm_work_mo%local_data(:, j_col_local) = &
@@ -2539,7 +2539,7 @@ CONTAINS
             !    ϵ_nk_i^GW = ϵ_nk_i^DFT + Σ^c_nn(k_i,ϵ) + Σ^x_nn(k_i) - v^xc_nn(k_i)
             CALL analyt_conti_and_print(bs_env, Sigma_c_ikp_n_freq, Sigma_x_ikp_n, &
                                         bs_env%v_xc_n(:, ikp, ispin), &
-                                        bs_env%eigenval_kp_scf(:, ikp, ispin), ikp, &
+                                        bs_env%eigenval_scf(:, ikp, ispin), ikp, &
                                         bs_env%nkp_bs, ispin)
 
             IF(bs_env%para_env%mepos == 0) PRINT *, 'ikp =', ikp, 'after analyt_conti_and_print'
@@ -2578,7 +2578,7 @@ CONTAINS
       CALL cp_fm_create(fm_ikp_re, cfm_mo_coeff%matrix_struct)
 
       ! Σ_µν(k_i) = sum_R e^ik_iR Σ_µν^R
-      CALL fm_trafo_rs_to_ikp(cfm_ikp, fm_rs, bs_env%kpoints_bandstructure, ikp)
+      CALL fm_trafo_rs_to_ikp(cfm_ikp, fm_rs, bs_env%kpoints_DOS, ikp)
 
       n_ao = bs_env%n_ao
 
