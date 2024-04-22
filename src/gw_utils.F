@@ -132,7 +132,7 @@ MODULE gw_utils
 
    PRIVATE
 
-   PUBLIC :: create_and_init_bs_env_for_gw, de_init_bs_env, get_i_j_atoms, &
+   PUBLIC :: create_and_init_bs_env_for_gw, de_init_bs_env, get_i_j_atoms, get_VBM_CBM_bandgaps, &
              kpoint_init_cell_index_simple, compute_xkp, time_to_freq, analyt_conti_and_print
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'gw_utils'
@@ -170,8 +170,6 @@ CONTAINS
 
       CALL cp_libint_static_init()
 
-      CALL allocate_GW_eigenvalues(bs_env)
-
       CALL setup_kpoints_chi_eps_W(qs_env, bs_env, bs_env%kpoints_chi_eps_W)
 
       CALL set_parallelization_parameters(qs_env, bs_env)
@@ -182,6 +180,8 @@ CONTAINS
 
       SELECT CASE (bs_env%small_cell_full_kp_or_large_cell_Gamma)
       CASE (large_cell_Gamma)
+
+         CALL allocate_GW_eigenvalues(bs_env)
 
          CALL create_tensors(qs_env, bs_env)
 
@@ -2348,14 +2348,18 @@ CONTAINS
       nkp_bs = bs_env%nkp_bs
 
       ALLOCATE (bs_env%eigenval_kp_scf(bs_env%n_ao, nkp_bs, bs_env%n_spin))
+      ALLOCATE (bs_env%eigenval_G0W0(bs_env%n_ao, nkp_bs, bs_env%n_spin))
       ALLOCATE (bs_env%fm_mo_coeff_kp(nkp_bs, bs_env%n_spin, 2))
       ALLOCATE (bs_env%fm_ks_kp(nkp_bs, bs_env%n_spin, 2))
+      ALLOCATE (bs_env%fm_s_kp(nkp_bs, bs_env%n_spin, 2))
       DO ikp = 1, nkp_bs
          DO ispin = 1, bs_env%n_spin
             DO re_im = 1, 2
                CALL cp_fm_create(bs_env%fm_mo_coeff_kp(ikp, ispin, re_im), &
                                  bs_env%cfm_work_mo%matrix_struct)
                CALL cp_fm_create(bs_env%fm_ks_kp(ikp, ispin, re_im), &
+                                 bs_env%cfm_work_mo%matrix_struct)
+               CALL cp_fm_create(bs_env%fm_s_kp(ikp, ispin, re_im), &
                                  bs_env%cfm_work_mo%matrix_struct)
             END DO
          END DO
@@ -2378,6 +2382,9 @@ CONTAINS
             CALL cp_cfm_to_fm(cfm_ks, &
                               bs_env%fm_ks_kp(ikp, ispin, 1), &
                               bs_env%fm_ks_kp(ikp, ispin, 2))
+            CALL cp_cfm_to_fm(cfm_s, &
+                              bs_env%fm_s_kp(ikp, ispin, 1), &
+                              bs_env%fm_s_kp(ikp, ispin, 2))
 
             ! Diagonalize KS-matrix via Rothaan-Hall equation:
             ! H^KS(k) C(k) = S(k) C(k) ε(k)
@@ -2689,18 +2696,18 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
    END SUBROUTINE time_to_freq
 
    SUBROUTINE analyt_conti_and_print(bs_env, Sigma_c_ikp_n_freq, Sigma_x_ikp_n, V_xc_ikp_n, &
-                                     eigenval_scf, ikp, ispin)
+                                     eigenval_scf, ikp, nkp, ispin)
 
       TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
       REAL(KIND=dp), DIMENSION(:, :, :)     :: Sigma_c_ikp_n_freq
       REAL(KIND=dp), DIMENSION(:)           :: Sigma_x_ikp_n, V_xc_ikp_n, eigenval_scf
-      INTEGER                                            :: ikp, ispin
+      INTEGER                                            :: ikp, ispin, nkp
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'analyt_conti_and_print'
 
       CHARACTER(len=3)                                   :: occ_vir
       CHARACTER(len=default_string_length)               :: fname
-      INTEGER                                            :: handle, i_mo, iunit, n_mo
+      INTEGER                                            :: handle, i_mo, iunit, n_mo, i_w
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: dummy, Sigma_c_ikp_n_qp
 
       CALL timeset(routineN, handle)
@@ -2711,7 +2718,17 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
 
       DO i_mo = 1, n_mo
 
+         ! parallelization
          IF (MODULO(i_mo, bs_env%para_env%num_pe) /= bs_env%para_env%mepos) CYCLE
+
+         ! JW 2del
+         IF(ikp == 1 .AND. i_mo == 1) THEN
+            DO i_w = 1, bs_env%num_freq_points_fit
+               PRINT *, 'i_w =', i_w, 'Σ^c_11(iw,k_1) =', &
+                        Sigma_c_ikp_n_freq(1, i_w, 1)*z_one + &
+                        Sigma_c_ikp_n_freq(1, i_w, 2)*gaussi
+            END DO
+         END IF
 
          CALL continuation_pade(Sigma_c_ikp_n_qp, &
                                 bs_env%imag_freq_points_fit, dummy, dummy, &
@@ -2734,7 +2751,7 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
                                             Sigma_x_ikp_n(:) - &
                                             V_xc_ikp_n(:)
 
-      CALL get_fname(fname, bs_env, ikp, "SCF_and_G0W0", ispin=ispin)
+      CALL get_fname(fname, bs_env, ikp, nkp, "SCF_and_G0W0", ispin=ispin)
 
       IF (bs_env%para_env%is_source()) THEN
 
@@ -2766,5 +2783,84 @@ SUBROUTINE trafo_V_xc_R_to_kp(qs_env, bs_env)
 
    END SUBROUTINE analyt_conti_and_print
 
+! **************************************************************************************************
+!> \brief ...
+!> \param bs_env ...
+! **************************************************************************************************
+   SUBROUTINE get_VBM_CBM_bandgaps(bs_env)
+
+      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'get_VBM_CBM_bandgaps'
+
+      INTEGER                                            :: handle, homo, homo_1, homo_2, ikp, &
+                                                            ispin, lumo, lumo_1, lumo_2, n_mo
+      REAL(KIND=dp)                                      :: E_DBG_G0W0_at_ikp, E_DBG_scf_at_ikp
+      REAL(KIND=dp), DIMENSION(:,:,:), POINTER :: eigenval_scf
+
+      CALL timeset(routineN, handle)
+
+      n_mo = bs_env%n_ao
+
+      bs_env%band_edges_scf%DBG = 1000.0_dp
+      bs_env%band_edges_G0W0%DBG = 1000.0_dp
+
+      SELECT CASE (bs_env%small_cell_full_kp_or_large_cell_Gamma)
+      CASE (large_cell_Gamma)
+         eigenval_scf => bs_env%eigenval_scf
+      CASE (small_cell_full_kp)
+         eigenval_scf => bs_env%eigenval_kp_scf
+      END SELECT
+
+      SELECT CASE (bs_env%n_spin)
+      CASE (1)
+         homo = bs_env%n_occ(1)
+         lumo = homo + 1
+         bs_env%band_edges_scf%VBM = MAXVAL(eigenval_scf(1:homo, :, 1))
+         bs_env%band_edges_scf%CBM = MINVAL(eigenval_scf(homo + 1:n_mo, :, 1))
+         bs_env%band_edges_G0W0%VBM = MAXVAL(bs_env%eigenval_G0W0(1:homo, :, 1))
+         bs_env%band_edges_G0W0%CBM = MINVAL(bs_env%eigenval_G0W0(homo + 1:n_mo, :, 1))
+      CASE (2)
+         homo_1 = bs_env%n_occ(1)
+         lumo_1 = homo_1 + 1
+         homo_2 = bs_env%n_occ(2)
+         lumo_2 = homo_2 + 1
+         bs_env%band_edges_scf%VBM = MAX(MAXVAL(eigenval_scf(1:homo_1, :, 1)), &
+                                         MAXVAL(eigenval_scf(1:homo_2, :, 2)))
+         bs_env%band_edges_scf%CBM = MIN(MINVAL(eigenval_scf(homo_1 + 1:n_mo, :, 1)), &
+                                         MINVAL(eigenval_scf(homo_2 + 1:n_mo, :, 2)))
+         bs_env%band_edges_G0W0%VBM = MAX(MAXVAL(bs_env%eigenval_G0W0(1:homo_1, :, 1)), &
+                                          MAXVAL(bs_env%eigenval_G0W0(1:homo_2, :, 2)))
+         bs_env%band_edges_G0W0%CBM = MIN(MINVAL(bs_env%eigenval_G0W0(homo_1 + 1:n_mo, :, 1)), &
+                                          MINVAL(bs_env%eigenval_G0W0(homo_2 + 1:n_mo, :, 2)))
+      CASE DEFAULT
+         CPABORT("Error with number of spins.")
+      END SELECT
+
+      bs_env%band_edges_scf%IDBG = bs_env%band_edges_scf%CBM - bs_env%band_edges_scf%VBM
+      bs_env%band_edges_G0W0%IDBG = bs_env%band_edges_G0W0%CBM - bs_env%band_edges_G0W0%VBM
+
+      DO ispin = 1, bs_env%n_spin
+
+         homo = bs_env%n_occ(ispin)
+
+         DO ikp = 1, bs_env%kpoints_DOS%nkp
+            E_DBG_scf_at_ikp = -MAXVAL(eigenval_scf(1:homo, ikp, ispin)) + &
+                               MINVAL(eigenval_scf(homo + 1:n_mo, ikp, ispin))
+            IF (E_DBG_scf_at_ikp < bs_env%band_edges_scf%DBG) THEN
+               bs_env%band_edges_scf%DBG = E_DBG_scf_at_ikp
+            END IF
+
+            E_DBG_G0W0_at_ikp = -MAXVAL(bs_env%eigenval_G0W0(1:homo, ikp, ispin)) + &
+                                MINVAL(bs_env%eigenval_G0W0(homo + 1:n_mo, ikp, ispin))
+            IF (E_DBG_G0W0_at_ikp < bs_env%band_edges_G0W0%DBG) THEN
+               bs_env%band_edges_G0W0%DBG = E_DBG_G0W0_at_ikp
+            END IF
+         END DO
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE get_VBM_CBM_bandgaps
 
 END MODULE gw_utils

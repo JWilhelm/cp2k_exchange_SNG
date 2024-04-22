@@ -56,7 +56,8 @@ MODULE gw_large_cell_gamma
                                               dbt_type
    USE gw_communication,                ONLY: global_matrix_to_local_matrix,&
                                               local_matrix_to_global_matrix
-   USE gw_utils,                        ONLY: de_init_bs_env, time_to_freq, analyt_conti_and_print
+   USE gw_utils,                        ONLY: de_init_bs_env, time_to_freq, analyt_conti_and_print, &
+             get_VBM_CBM_bandgaps
    USE input_constants,                 ONLY: ri_rpa_g0w0_crossing_newton
    USE input_section_types,             ONLY: section_vals_type
    USE kinds,                           ONLY: default_string_length,&
@@ -2586,7 +2587,8 @@ i_ao_1, i_ao_2
             ! 8. Analytic continuation Σ^c_nn(k_i,iω) -> Σ^c_nn(k_i,ϵ) and
             !    ϵ_nk_i^GW = ϵ_nk_i^DFT + Σ^c_nn(k_i,ϵ) + Σ^x_nn(k_i) - v^xc_nn(k_i)
             CALL analyt_conti_and_print(bs_env, Sigma_c_ikp_n_freq, Sigma_x_ikp_n, V_xc_ikp_n, &
-                                        bs_env%eigenval_scf(:, ikp, ispin), ikp, ispin)
+                                        bs_env%eigenval_scf(:, ikp, ispin), ikp, &
+                                        bs_env%kpoints_DOS%nkp, ispin)
 
          END DO ! ikp_DOS
 
@@ -2689,78 +2691,6 @@ i_ao_1, i_ao_2
       CALL timestop(handle)
 
    END SUBROUTINE fm_Gamma_ao_to_cfm_ikp_mo
-
-! **************************************************************************************************
-!> \brief ...
-!> \param bs_env ...
-! **************************************************************************************************
-   SUBROUTINE get_VBM_CBM_bandgaps(bs_env)
-
-      TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'get_VBM_CBM_bandgaps'
-
-      INTEGER                                            :: handle, homo, homo_1, homo_2, ikp, &
-                                                            ispin, lumo, lumo_1, lumo_2, n_mo
-      REAL(KIND=dp)                                      :: E_DBG_G0W0_at_ikp, E_DBG_scf_at_ikp
-
-      CALL timeset(routineN, handle)
-
-      n_mo = bs_env%n_ao
-
-      bs_env%band_edges_scf%DBG = 1000.0_dp
-      bs_env%band_edges_G0W0%DBG = 1000.0_dp
-
-      SELECT CASE (bs_env%n_spin)
-      CASE (1)
-         homo = bs_env%n_occ(1)
-         lumo = homo + 1
-         bs_env%band_edges_scf%VBM = MAXVAL(bs_env%eigenval_scf(1:homo, :, 1))
-         bs_env%band_edges_scf%CBM = MINVAL(bs_env%eigenval_scf(homo + 1:n_mo, :, 1))
-         bs_env%band_edges_G0W0%VBM = MAXVAL(bs_env%eigenval_G0W0(1:homo, :, 1))
-         bs_env%band_edges_G0W0%CBM = MINVAL(bs_env%eigenval_G0W0(homo + 1:n_mo, :, 1))
-      CASE (2)
-         homo_1 = bs_env%n_occ(1)
-         lumo_1 = homo_1 + 1
-         homo_2 = bs_env%n_occ(2)
-         lumo_2 = homo_2 + 1
-         bs_env%band_edges_scf%VBM = MAX(MAXVAL(bs_env%eigenval_scf(1:homo_1, :, 1)), &
-                                         MAXVAL(bs_env%eigenval_scf(1:homo_2, :, 2)))
-         bs_env%band_edges_scf%CBM = MIN(MINVAL(bs_env%eigenval_scf(homo_1 + 1:n_mo, :, 1)), &
-                                         MINVAL(bs_env%eigenval_scf(homo_2 + 1:n_mo, :, 2)))
-         bs_env%band_edges_G0W0%VBM = MAX(MAXVAL(bs_env%eigenval_G0W0(1:homo_1, :, 1)), &
-                                          MAXVAL(bs_env%eigenval_G0W0(1:homo_2, :, 2)))
-         bs_env%band_edges_G0W0%CBM = MIN(MINVAL(bs_env%eigenval_G0W0(homo_1 + 1:n_mo, :, 1)), &
-                                          MINVAL(bs_env%eigenval_G0W0(homo_2 + 1:n_mo, :, 2)))
-      CASE DEFAULT
-         CPABORT("Error with number of spins.")
-      END SELECT
-
-      bs_env%band_edges_scf%IDBG = bs_env%band_edges_scf%CBM - bs_env%band_edges_scf%VBM
-      bs_env%band_edges_G0W0%IDBG = bs_env%band_edges_G0W0%CBM - bs_env%band_edges_G0W0%VBM
-
-      DO ispin = 1, bs_env%n_spin
-
-         homo = bs_env%n_occ(ispin)
-
-         DO ikp = 1, bs_env%kpoints_DOS%nkp
-            E_DBG_scf_at_ikp = -MAXVAL(bs_env%eigenval_scf(1:homo, ikp, ispin)) + &
-                               MINVAL(bs_env%eigenval_scf(homo + 1:n_mo, ikp, ispin))
-            IF (E_DBG_scf_at_ikp < bs_env%band_edges_scf%DBG) THEN
-               bs_env%band_edges_scf%DBG = E_DBG_scf_at_ikp
-            END IF
-
-            E_DBG_G0W0_at_ikp = -MAXVAL(bs_env%eigenval_G0W0(1:homo, ikp, ispin)) + &
-                                MINVAL(bs_env%eigenval_G0W0(homo + 1:n_mo, ikp, ispin))
-            IF (E_DBG_G0W0_at_ikp < bs_env%band_edges_G0W0%DBG) THEN
-               bs_env%band_edges_G0W0%DBG = E_DBG_G0W0_at_ikp
-            END IF
-         END DO
-      END DO
-
-      CALL timestop(handle)
-
-   END SUBROUTINE get_VBM_CBM_bandgaps
 
 ! **************************************************************************************************
 !> \brief compute H^G0W0(k=0) = S(k=0)*C(k=0)ϵ^G0W0(k=0)*C(k=0)*S(k=0)

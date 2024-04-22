@@ -44,7 +44,8 @@ MODULE gw_small_cell_full_kp
         dbcsr_type, dbcsr_type_no_symmetry
    USE distribution_2d_types,           ONLY: distribution_2d_type
    USE gw_integrals,                    ONLY: build_3c_integrals
-   USE gw_utils,                        ONLY: de_init_bs_env, time_to_freq, analyt_conti_and_print
+   USE gw_utils,                        ONLY: de_init_bs_env, time_to_freq, analyt_conti_and_print, &
+get_VBM_CBM_bandgaps
    USE input_section_types,             ONLY: section_vals_type
    USE kinds,                           ONLY: dp,&
                                               int_8
@@ -1086,47 +1087,55 @@ CONTAINS
 
 ! JW 2del THIS IS ONLY FOR DEBUGGING!!!!!!!!!!!!!!
 !      CALL fm_to_local_array(bs_env%fm_MWM_R_t(:,1), W_R)
-      CALL fm_to_local_array(bs_env%fm_W_R_t(:, 1), W_R)
-      DO i_cell_R = 1, bs_env%nimages_scf_desymm
+      DO i_t = 1, bs_env%num_time_freq_points
 
-         cell_R = bs_env%kpoints_scf_desymm%index_to_cell(i_cell_R, 1:3)
+         IF (bs_env%para_env%mepos == 0) PRINT *, 'i_t =', i_t, &
+                   'tau =', bs_env%imag_time_points(i_t)
 
-         DO i_cell_R2 = 1, bs_env%nimages_scf_desymm
-            cell_R2 = bs_env%kpoints_scf_desymm%index_to_cell(i_cell_R2, 1:3)
-            IF (cell_R2(1) == -cell_R(1) .AND. cell_R2(2) == -cell_R(2)) THEN
-               i_cell_R_inv = i_cell_R2
-               cell_R_inv = cell_R2
-            END IF
-         END DO
-
-         DO P_RI = 1, MIN(bs_env%n_RI, 50)
-            DO Q_RI = 1, MIN(bs_env%n_RI, 50)
-               IF (bs_env%para_env%mepos == 0) THEN
-                  PRINT *, 'P =', P_RI, 'Q =', Q_RI, 'R =', cell_R(1:2), 'Ŵ_PQ^R =', &
-                     W_R(P_RI, Q_RI, i_cell_R)
-                  IF (ABS(W_R(P_RI, Q_RI, i_cell_R)) > 1E-6_dp .AND. &
-                      ABS(W_R(P_RI, Q_RI, i_cell_R) - &
-                          W_R(Q_RI, P_RI, i_cell_R_inv))/ &
-                      ABS(W_R(P_RI, Q_RI, i_cell_R)) > 1E-2_dp) THEN
-                     PRINT *, 'ERROR'
-                     PRINT *, 'P =', Q_RI, 'Q =', P_RI, 'R =', cell_R_inv(1:2), 'Ŵ_PQ^R =', &
-                        W_R(Q_RI, P_RI, i_cell_R_inv)
+         CALL fm_to_local_array(bs_env%fm_W_R_t(:, i_t), W_R)
+         DO i_cell_R = 1, bs_env%nimages_scf_desymm
+   
+            cell_R = bs_env%kpoints_scf_desymm%index_to_cell(i_cell_R, 1:3)
+   
+            DO i_cell_R2 = 1, bs_env%nimages_scf_desymm
+               cell_R2 = bs_env%kpoints_scf_desymm%index_to_cell(i_cell_R2, 1:3)
+               IF (cell_R2(1) == -cell_R(1) .AND. cell_R2(2) == -cell_R(2)) THEN
+                  i_cell_R_inv = i_cell_R2
+                  cell_R_inv = cell_R2
+               END IF
+            END DO
+   
+            DO P_RI = 1, MIN(bs_env%n_RI, 50)
+               DO Q_RI = 1, MIN(bs_env%n_RI, 50)
+                  IF (bs_env%para_env%mepos == 0) THEN
+                     PRINT *, 'i_t =', i_t,'P =', P_RI, 'Q =', Q_RI, &
+                       'R =', cell_R(1:2), 'Ŵ_PQ^R =', W_R(P_RI, Q_RI, i_cell_R)
+                     IF (ABS(W_R(P_RI, Q_RI, i_cell_R)) > 1E-6_dp .AND. &
+                         ABS(W_R(P_RI, Q_RI, i_cell_R) - &
+                             W_R(Q_RI, P_RI, i_cell_R_inv))/ &
+                         ABS(W_R(P_RI, Q_RI, i_cell_R)) > 1E-2_dp) THEN
+                        PRINT *, 'ERROR'
+                        PRINT *, 'i_t =', i_t, 'P =', Q_RI, 'Q =', P_RI, &
+                                 'R =', cell_R_inv(1:2), 'Ŵ_PQ^R =', &
+                           W_R(Q_RI, P_RI, i_cell_R_inv)
+                     END IF
                   END IF
-               END IF
+               END DO
             END DO
-         END DO
-
-         DO P_RI = 1, bs_env%n_RI
-            DO Q_RI = 1, bs_env%n_RI
-               el = W_R(P_RI, Q_RI, i_cell_R)
-               IF (i_t == 1 .AND. bs_env%para_env%mepos == 0 .AND. &
-                   (cell_R(1) .NE. 0 .OR. cell_R(2) .NE. 0) .AND. ABS(el) > 1.0E-3_dp) THEN
-                  PRINT *, 'P =', P_RI, 'Q =', Q_RI, 'R =', cell_R(1:2), 'nonzero Ŵ_PQ^R =', el
-               END IF
+   
+            DO P_RI = 1, bs_env%n_RI
+               DO Q_RI = 1, bs_env%n_RI
+                  el = W_R(P_RI, Q_RI, i_cell_R)
+                  IF (i_t == 1 .AND. bs_env%para_env%mepos == 0 .AND. &
+                      (cell_R(1) .NE. 0 .OR. cell_R(2) .NE. 0) .AND. ABS(el) > 1.0E-3_dp) THEN
+                     PRINT *, 'P =', P_RI, 'Q =', Q_RI, 'R =', cell_R(1:2), 'nonzero Ŵ_PQ^R =', el
+                  END IF
+               END DO
             END DO
-         END DO
 
-      END DO
+        END DO ! i_cell_R
+
+      END DO ! i_t
 
 ! END JW 2del
 
@@ -2349,10 +2358,10 @@ CONTAINS
             ! get W_PQ^R(iτ)
             CALL fm_to_local_array(bs_env%fm_W_R_t(:, i_t), W_R_tau)
 
-            DO i_task_local = 1, bs_env%n_tasks_local
+            Sigma_c_R_neg_tau(:,:,:) = 0.0_dp
+            Sigma_c_R_pos_tau(:,:,:) = 0.0_dp
 
-!               PRINT *, 'i_task_local =', i_task_local, ' / ', bs_env%n_tasks_local, &
-!                  'memused =', memory_fully_used
+            DO i_task_local = 1, bs_env%n_tasks_local
 
                ! M^W_σ0,νS1,PR1 = sum_QR2 ( σ0 νS1 | QR1-R2 ) W_QP^R2(iτ) for i_task_local
                CALL compute_3c_and_contract_W(M_W, W_R_tau, store_int_3c_W, i_task_local, &
@@ -2388,13 +2397,13 @@ CONTAINS
             END IF
 
          ! JW 2del
-         IF (bs_env%para_env%mepos == 0 .AND. i_t == 1) THEN
+         IF (bs_env%para_env%mepos == 0 ) THEN
             DO i_cell_R = 1, bs_env%nimages_scf_desymm
                cell_R = bs_env%kpoints_scf_desymm%index_to_cell(i_cell_R, 1:3)
                DO i_ao_1 = 1, MIN(bs_env%n_ao, 30)
                   DO i_ao_2 = 1, MIN(bs_env%n_ao, 30)
-                     PRINT *, 'λ =', i_ao_1, 'σ =', i_ao_2, 'R =', cell_R(1:2), &
-                        'Σ^c_λσ^R(iτ_1 mp 0) =', Sigma_c_R_neg_tau(i_ao_1, i_ao_2, i_cell_R), &
+                     PRINT *, 'tj =', i_t, 'λ =', i_ao_1, 'σ =', i_ao_2, 'R =', cell_R(1:2), &
+                        'Σ^c_λσ^R(iτ_j mp 0) =', Sigma_c_R_neg_tau(i_ao_1, i_ao_2, i_cell_R), &
                            Sigma_c_R_pos_tau(i_ao_1, i_ao_2, i_cell_R)
                   END DO
                END DO
@@ -2485,7 +2494,6 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       CALL cp_cfm_create(cfm_mo_coeff, bs_env%fm_s_Gamma%matrix_struct)
-      ! JW TODO: fully distribute these arrays at given time; also eigenvalues in bs_env
       ALLOCATE (Sigma_x_ikp_n(bs_env%n_ao))
       ALLOCATE (Sigma_c_ikp_n_time(bs_env%n_ao, bs_env%num_time_freq_points, 2))
       ALLOCATE (Sigma_c_ikp_n_freq(bs_env%n_ao, bs_env%num_time_freq_points, 2))
@@ -2511,22 +2519,36 @@ CONTAINS
                                        Sigma_c_ikp_n_time(:, j_t, 2), cfm_mo_coeff, bs_env, ikp)
             END DO
 
+            ! JW 2del
+            IF(ikp == 1 .AND. bs_env%para_env%mepos == 0) THEN
+              DO j_t = 1, bs_env%num_time_freq_points
+                PRINT *, 'j_t =', j_t, 'Σ_11(+/-τ_j,k_1) =', Sigma_c_ikp_n_time(1, j_t, 1:2)
+              END DO
+            END IF
+
             ! 4. Σ^c_nn(k_i,iω) = ∫ from -∞ to ∞ dτ e^-iωτ Σ^c_nn(k_i,iτ)
             CALL time_to_freq(bs_env, Sigma_c_ikp_n_time, Sigma_c_ikp_n_freq, ispin)
 
-            PRINT *, 'ikp =', ikp, 'before analyt_conti_and_print'
+            IF(ikp == 1 .AND. bs_env%para_env%mepos == 0) THEN
+              PRINT *, 'Σ_11(+/-w_1,k_1) =', Sigma_c_ikp_n_freq(1, 1, 1:2)
+            END IF
+
+            IF(bs_env%para_env%mepos == 0) PRINT *, 'ikp =', ikp, 'before analyt_conti_and_print'
 
             ! 5. Analytic continuation Σ^c_nn(k_i,iω) -> Σ^c_nn(k_i,ϵ) and
             !    ϵ_nk_i^GW = ϵ_nk_i^DFT + Σ^c_nn(k_i,ϵ) + Σ^x_nn(k_i) - v^xc_nn(k_i)
             CALL analyt_conti_and_print(bs_env, Sigma_c_ikp_n_freq, Sigma_x_ikp_n, &
-                                        bs_env%v_xc_n(ikp, :, ispin), &
-                                        bs_env%eigenval_kp_scf(:, ikp, ispin), ikp, ispin)
+                                        bs_env%v_xc_n(:, ikp, ispin), &
+                                        bs_env%eigenval_kp_scf(:, ikp, ispin), ikp, &
+                                        bs_env%nkp_bs, ispin)
 
-            PRINT *, 'ikp =', ikp, 'after analyt_conti_and_print'
+            IF(bs_env%para_env%mepos == 0) PRINT *, 'ikp =', ikp, 'after analyt_conti_and_print'
 
          END DO ! ikp
 
       END DO ! ispin
+
+      CALL get_VBM_CBM_bandgaps(bs_env)
 
       CALL cp_cfm_release(cfm_mo_coeff)
 

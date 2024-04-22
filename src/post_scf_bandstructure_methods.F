@@ -64,11 +64,11 @@ CONTAINS
       ! quantities from local DOS (LDOS) as local valence band maximum (VBM), local conduction
       ! band minimum (CBM), and local gap are calculated (local: as function of space r)
 
-      !JW HACK
-      IF (.NOT. qs_env%bs_env%do_gw .OR. &
-          qs_env%bs_env%small_cell_full_kp_or_large_cell_Gamma == large_cell_Gamma) THEN
+      !JW HACK 2del
+!      IF (.NOT. qs_env%bs_env%do_gw .OR. &
+!          qs_env%bs_env%small_cell_full_kp_or_large_cell_Gamma == large_cell_Gamma) THEN
          CALL dos_pdos_ldos(qs_env, qs_env%bs_env)
-      END IF
+!      END IF
 
       ! band structure of primitive unit cell for DFT, DFT+SOC, G0W0, G0W0+SOC
       IF (qs_env%bs_env%do_bs_primitive_cell) THEN

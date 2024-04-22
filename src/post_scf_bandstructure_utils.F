@@ -11,6 +11,11 @@
 !> \date 07.2023
 ! **************************************************************************************************
 MODULE post_scf_bandstructure_utils
+   USE cp_cfm_types,                    ONLY: cp_cfm_create,&
+                                              cp_cfm_release,&
+                                              cp_cfm_to_fm,&
+                                              cp_cfm_type,&
+                                              cp_fm_to_cfm
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
    USE kpoint_methods,                  ONLY: kpoint_init_cell_index,&
                                               rskp_transform
@@ -1363,7 +1368,7 @@ CONTAINS
 
       INTEGER                                            :: handle, homo, homo_1, homo_2, &
                                                             homo_spinor, ikp, ispin, n_ao, n_E, &
-                                                            nkind
+                                                            nkind, nkp
       REAL(KIND=dp)                                      :: broadening, E_max, E_max_G0W0, E_min, &
                                                             E_min_G0W0, E_total_window, &
                                                             energy_step_DOS, energy_window_DOS, t1
@@ -1500,24 +1505,51 @@ CONTAINS
          WRITE (bs_env%unit_nr, '(A)') ''
       END IF
 
-      DO ikp = 1, bs_env%kpoints_DOS%nkp
+      SELECT CASE (bs_env%small_cell_full_kp_or_large_cell_Gamma)
+      CASE (large_cell_Gamma)
+        nkp = bs_env%kpoints_DOS%nkp
+      CASE (small_cell_full_kp)
+        nkp = bs_env%nkp_bs
+        CALL cp_cfm_create(cfm_ks_ikp, bs_env%fm_ks_kp(1, 1, 1)%matrix_struct)
+        CALL cp_cfm_create(cfm_s_ikp, bs_env%fm_ks_kp(1, 1, 1)%matrix_struct)
+      END SELECT
+
+      DO ikp = 1, nkp
 
          t1 = m_walltime()
 
          DO ispin = 1, bs_env%n_spin
 
-            ! 1. get H^KS_µν(k_i) from H^KS_µν(k=0)
-            CALL cfm_ikp_from_fm_Gamma(cfm_ks_ikp, bs_env%fm_ks_Gamma(ispin), &
-                                       ikp, qs_env, bs_env%kpoints_DOS, "ORB")
+            SELECT CASE (bs_env%small_cell_full_kp_or_large_cell_Gamma)
+            CASE (large_cell_Gamma)
 
-            ! 2. get S_µν(k_i) from S_µν(k=0)
-            CALL cfm_ikp_from_fm_Gamma(cfm_s_ikp, bs_env%fm_s_Gamma, &
-                                       ikp, qs_env, bs_env%kpoints_DOS, "ORB")
-            CALL cp_cfm_to_cfm(cfm_s_ikp, cfm_s_ikp_copy)
+               ! 1. get H^KS_µν(k_i) from H^KS_µν(k=0)
+               CALL cfm_ikp_from_fm_Gamma(cfm_ks_ikp, bs_env%fm_ks_Gamma(ispin), &
+                                          ikp, qs_env, bs_env%kpoints_DOS, "ORB")
 
-            ! 3. Diagonalize (Roothaan-Hall): H_KS(k_i)*C(k_i) = S(k_i)*C(k_i)*ϵ(k_i)
-            CALL cp_cfm_geeig(cfm_ks_ikp, cfm_s_ikp_copy, cfm_mos_ikp(ispin), &
-                              eigenval, cfm_work_ikp)
+               ! 2. get S_µν(k_i) from S_µν(k=0)
+               CALL cfm_ikp_from_fm_Gamma(cfm_s_ikp, bs_env%fm_s_Gamma, &
+                                          ikp, qs_env, bs_env%kpoints_DOS, "ORB")
+               CALL cp_cfm_to_cfm(cfm_s_ikp, cfm_s_ikp_copy)
+
+               ! 3. Diagonalize (Roothaan-Hall): H_KS(k_i)*C(k_i) = S(k_i)*C(k_i)*ϵ(k_i)
+               CALL cp_cfm_geeig(cfm_ks_ikp, cfm_s_ikp_copy, cfm_mos_ikp(ispin), &
+                                 eigenval, cfm_work_ikp)
+
+            CASE (small_cell_full_kp)
+
+               ! 1. get H^KS_µν(k_i)
+               CALL cp_fm_to_cfm(bs_env%fm_ks_kp(ikp, ispin, 1), &
+                                 bs_env%fm_ks_kp(ikp, ispin, 2), cfm_ks_ikp)
+               ! 2. get S_µν(k_i)
+               CALL cp_fm_to_cfm(bs_env%fm_s_kp(ikp, ispin, 1), &
+                                 bs_env%fm_s_kp(ikp, ispin, 2), cfm_s_ikp)
+               ! 3. get C_µn(k_i) and ϵ_n(k_i)
+               CALL cp_fm_to_cfm(bs_env%fm_mo_coeff_kp(ikp, ispin, 1), &
+                                 bs_env%fm_mo_coeff_kp(ikp, ispin, 2), cfm_mos_ikp(ispin))
+               eigenval(:) = bs_env%eigenval_kp_scf(:, ikp, ispin)
+
+            END SELECT
 
             ! 4. Projection p_nk^A of MO ψ_nk(r) on atom type A (inspired by Mulliken charge)
             !    p_nk^A = sum_µ^A,ν C*_µ^A,n(k) S_µ^A,ν(k) C_ν,n(k)
@@ -1583,7 +1615,7 @@ CONTAINS
 
          IF (bs_env%unit_nr > 0) THEN
             WRITE (bs_env%unit_nr, '(T2,A,T43,I5,A,I3,A,F7.1,A)') &
-               'Compute DOS, LDOS for k-point ', ikp, ' /', bs_env%kpoints_DOS%nkp, &
+               'Compute DOS, LDOS for k-point ', ikp, ' /', nkp, &
                ',    Execution time', m_walltime() - t1, ' s'
          END IF
 
@@ -2293,7 +2325,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      CALL get_fname(fname, bs_env, ikp, scf_gw, SOC=.TRUE.)
+      CALL get_fname(fname, bs_env, ikp, bs_env%kpoints_DOS%nkp, scf_gw, SOC=.TRUE.)
 
       IF (bs_env%para_env%is_source()) THEN
 
@@ -2336,10 +2368,10 @@ CONTAINS
 !> \param ispin ...
 !> \param SOC ...
 ! **************************************************************************************************
-   SUBROUTINE get_fname(fname, bs_env, ikp, scf_gw, ispin, SOC)
+   SUBROUTINE get_fname(fname, bs_env, ikp, nkp, scf_gw, ispin, SOC)
       CHARACTER(len=default_string_length)               :: fname
       TYPE(post_scf_bandstructure_type), POINTER         :: bs_env
-      INTEGER                                            :: ikp
+      INTEGER                                            :: ikp, nkp
       CHARACTER(len=*)                                   :: scf_gw
       INTEGER, OPTIONAL                                  :: ispin
       LOGICAL, OPTIONAL                                  :: SOC
@@ -2356,7 +2388,8 @@ CONTAINS
       my_SOC = .FALSE.
       IF (PRESENT(SOC)) my_SOC = SOC
 
-      n_zeros = count_digits(bs_env%kpoints_DOS%nkp) - count_digits(ikp)
+! JW 2del      n_zeros = count_digits(bs_env%kpoints_DOS%nkp) - count_digits(ikp)
+      n_zeros = count_digits(nkp) - count_digits(ikp)
 
       WRITE (digits_ikp, '(I1)') count_digits(ikp)
 

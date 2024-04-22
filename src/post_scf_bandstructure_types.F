@@ -303,6 +303,7 @@ MODULE post_scf_bandstructure_types
       ! full complex fm for k-dependent mo coefficients C_μn(k,spin,re/im) from SCF
       TYPE(cp_fm_type), DIMENSION(:, :, :), ALLOCATABLE :: fm_mo_coeff_kp, &
                                                            fm_ks_kp, &
+                                                           fm_s_kp, &
                                                            fm_V_xc_kp
       TYPE(cp_fm_type), DIMENSION(:), ALLOCATABLE       :: fm_G_S, &
                                                            fm_Sigma_x_R
@@ -424,6 +425,7 @@ CONTAINS
       CALL release_dbcsr_p_type(bs_env%mat_W_MIC_time_tensor)
 
       CALL safe_fm_destroy_3d(bs_env%fm_ks_kp)
+      CALL safe_fm_destroy_3d(bs_env%fm_s_kp)
       CALL safe_fm_destroy_3d(bs_env%fm_V_xc_kp)
       CALL safe_fm_destroy_3d(bs_env%fm_mo_coeff_kp)
 
